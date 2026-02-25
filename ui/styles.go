@@ -4,85 +4,124 @@ import "github.com/charmbracelet/lipgloss"
 
 // Tokyo Night palette
 var (
-	background = lipgloss.Color("#1a1b26")
 	surface    = lipgloss.Color("#24283b")
 	overlay    = lipgloss.Color("#414868")
 	foreground = lipgloss.Color("#c0caf5")
 	muted      = lipgloss.Color("#565f89")
+	subtle     = lipgloss.Color("#3b4261")
 	blue       = lipgloss.Color("#7aa2f7")
 	cyan       = lipgloss.Color("#7dcfff")
 	green      = lipgloss.Color("#9ece6a")
 	red        = lipgloss.Color("#f7768e")
+	magenta    = lipgloss.Color("#bb9af7")
 )
 
-var (
-	AppStyle = lipgloss.NewStyle().
-			Padding(1, 2)
+// ── Header ───────────────────────────────────────────────────────────
 
-	TitleStyle = lipgloss.NewStyle().
-			Foreground(blue).
-			Bold(true)
+var logoStyle = lipgloss.NewStyle().
+	Foreground(blue).
+	Bold(true)
 
-	BorderStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(overlay).
-			Padding(0, 1)
+var headerAccentStyle = lipgloss.NewStyle().
+	Foreground(magenta).
+	Bold(true)
 
-	ItemStyle = lipgloss.NewStyle().
-			Foreground(foreground).
-			Padding(0, 1)
+var countStyle = lipgloss.NewStyle().
+	Foreground(muted)
 
-	SelectedStyle = lipgloss.NewStyle().
-			Foreground(blue).
-			Background(surface).
-			Bold(true).
-			Padding(0, 1)
+var daemonOnStyle = lipgloss.NewStyle().
+	Foreground(green).
+	Bold(true)
 
-	IndexStyle = lipgloss.NewStyle().
-			Foreground(muted).
-			Width(4).
-			Align(lipgloss.Right)
+var daemonOffStyle = lipgloss.NewStyle().
+	Foreground(red).
+	Bold(true)
 
-	SelectedIndexStyle = lipgloss.NewStyle().
-				Foreground(blue).
-				Background(surface).
-				Width(4).
-				Align(lipgloss.Right)
+// ── List rows ────────────────────────────────────────────────────────
 
-	TimestampStyle = lipgloss.NewStyle().
-			Foreground(cyan)
+var normalContentStyle = lipgloss.NewStyle().
+	Foreground(foreground)
 
-	SelectedTimestampStyle = lipgloss.NewStyle().
-				Foreground(cyan).
-				Background(surface)
+var selectedContentStyle = lipgloss.NewStyle().
+	Foreground(foreground).
+	Bold(true)
 
-	CursorStyle = lipgloss.NewStyle().
-			Foreground(blue).
-			Bold(true)
+var indexStyle = lipgloss.NewStyle().
+	Foreground(subtle)
 
-	HelpBarStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(overlay).
-			Foreground(muted).
-			Padding(0, 1)
+var selectedIndexStyle = lipgloss.NewStyle().
+	Foreground(blue).
+	Bold(true)
 
-	HelpKeyStyle = lipgloss.NewStyle().
-			Foreground(foreground).
-			Bold(true)
+var timestampStyle = lipgloss.NewStyle().
+	Foreground(muted)
 
-	HelpDescStyle = lipgloss.NewStyle().
-			Foreground(muted)
+var selectedTimestampStyle = lipgloss.NewStyle().
+	Foreground(cyan)
 
-	EmptyStyle = lipgloss.NewStyle().
-			Foreground(muted).
-			Italic(true).
-			Padding(1, 2)
+var cursorStyle = lipgloss.NewStyle().
+	Foreground(blue).
+	Bold(true)
 
-	SuccessStyle = lipgloss.NewStyle().
-			Foreground(green).
-			Bold(true)
+// ── Scrollbar ────────────────────────────────────────────────────────
 
-	DangerStyle = lipgloss.NewStyle().
-			Foreground(red).
-			Bold(true)
-)
+var scrollTrackStyle = lipgloss.NewStyle().
+	Foreground(subtle)
+
+var scrollThumbStyle = lipgloss.NewStyle().
+	Foreground(blue)
+
+// ── Preview pane ─────────────────────────────────────────────────────
+
+var previewLabelStyle = lipgloss.NewStyle().
+	Foreground(muted).
+	Italic(true)
+
+var previewContentStyle = lipgloss.NewStyle().
+	Foreground(foreground)
+
+// ── Main container ───────────────────────────────────────────────────
+
+var outerBorderStyle = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(overlay).
+	Padding(1, 2)
+
+// ── Help bar ─────────────────────────────────────────────────────────
+
+var helpBarStyle = lipgloss.NewStyle().
+	Foreground(muted).
+	Padding(0, 1)
+
+var helpKeyStyle = lipgloss.NewStyle().
+	Foreground(blue).
+	Bold(true)
+
+var helpDescStyle = lipgloss.NewStyle().
+	Foreground(muted)
+
+var helpSepStyle = lipgloss.NewStyle().
+	Foreground(subtle)
+
+// ── Empty state ──────────────────────────────────────────────────────
+
+var emptyStyle = lipgloss.NewStyle().
+	Foreground(muted).
+	Italic(true).
+	Align(lipgloss.Center)
+
+var emptyIconStyle = lipgloss.NewStyle().
+	Foreground(subtle)
+
+// ── Flash / status messages ──────────────────────────────────────────
+
+var successStyle = lipgloss.NewStyle().
+	Foreground(green).
+	Bold(true)
+
+var dangerStyle = lipgloss.NewStyle().
+	Foreground(red).
+	Bold(true)
+
+var dividerStyle = lipgloss.NewStyle().
+	Foreground(subtle)

@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/atiladefreitas/prevy/clipboard"
@@ -13,232 +14,457 @@ import (
 	"github.com/atiladefreitas/prevy/store"
 )
 
-type status int
+// ── Custom messages ──────────────────────────────────────────────────
 
-const (
-	statusBrowsing status = iota
-	statusCopied
-	statusPasted
-	statusCleared
-)
+// entriesLoadedMsg is sent when history finishes loading from disk.
+type entriesLoadedMsg struct {
+	entries []store.Entry
+}
 
+// tickMsg drives periodic updates (timestamp refresh, flash dismiss).
+type tickMsg time.Time
+
+// flashMsg sets a temporary status message.
+type flashMsg struct {
+	text  string
+	style lipgloss.Style
+}
+
+// clearFlashMsg clears the flash after a timeout.
+type clearFlashMsg struct{}
+
+// ── Commands ─────────────────────────────────────────────────────────
+
+func loadEntries() tea.Msg {
+	entries, _ := store.Load()
+	return entriesLoadedMsg{entries: entries}
+}
+
+func tickEvery() tea.Cmd {
+	return tea.Tick(30*time.Second, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
+func dismissFlashAfter(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(_ time.Time) tea.Msg {
+		return clearFlashMsg{}
+	})
+}
+
+// ── Model ────────────────────────────────────────────────────────────
+
+// Model holds all TUI state.
 type Model struct {
 	entries      []store.Entry
 	cursor       int
 	width        int
 	height       int
-	status       status
+	ready        bool
 	pasteContent string
+	shouldPaste  bool
+	shouldQuit   bool
+	flashText    string
+	flashStyle   lipgloss.Style
 	daemonAlive  bool
 }
 
+// New creates a Model. Actual data loading happens in Init via a command.
 func New() Model {
-	entries, _ := store.Load()
-
 	return Model{
-		entries:     entries,
-		cursor:      0,
 		daemonAlive: daemon.IsRunning(),
 	}
 }
 
-func (m Model) ShouldPaste() bool {
-	return m.status == statusPasted
-}
+func (m Model) ShouldPaste() bool    { return m.shouldPaste }
+func (m Model) PasteContent() string { return m.pasteContent }
 
-func (m Model) PasteContent() string {
-	return m.pasteContent
-}
-
+// Init kicks off async entry loading and the periodic tick.
 func (m Model) Init() tea.Cmd {
-	return nil
+	return tea.Batch(loadEntries, tickEvery())
 }
+
+// ── Update ───────────────────────────────────────────────────────────
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+
+	case entriesLoadedMsg:
+		m.entries = msg.entries
+		m.ready = true
+		return m, nil
+
+	case tickMsg:
+		// Refresh timestamps on screen; just re-render.
+		return m, tickEvery()
+
+	case clearFlashMsg:
+		m.flashText = ""
+		return m, nil
+
+	case flashMsg:
+		m.flashText = msg.text
+		m.flashStyle = msg.style
+		return m, dismissFlashAfter(2 * time.Second)
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
 
 	case tea.KeyMsg:
-		action := parseKey(msg)
-
-		switch action {
-		case keyQuit:
-			return m, tea.Quit
-
-		case keyUp:
-			if m.cursor > 0 {
-				m.cursor--
-			}
-
-		case keyDown:
-			if m.cursor < len(m.entries)-1 {
-				m.cursor++
-			}
-
-		case keySelect:
-			if len(m.entries) > 0 {
-				_ = clipboard.Write(m.entries[m.cursor].Content)
-				m.status = statusCopied
-				return m, tea.Quit
-			}
-
-		case keyPaste:
-			if len(m.entries) > 0 {
-				_ = clipboard.Write(m.entries[m.cursor].Content)
-				m.pasteContent = m.entries[m.cursor].Content
-				m.status = statusPasted
-				return m, tea.Quit
-			}
-
-		case keyClearAll:
-			_ = store.Clear()
-			m.entries = []store.Entry{}
-			m.cursor = 0
-			m.status = statusCleared
-		}
+		return m.handleKey(msg)
 	}
+
 	return m, nil
 }
 
+func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	action := parseKey(msg)
+
+	switch action {
+	case keyQuit:
+		return m, tea.Quit
+
+	case keyUp:
+		if m.cursor > 0 {
+			m.cursor--
+		}
+
+	case keyDown:
+		if m.cursor < len(m.entries)-1 {
+			m.cursor++
+		}
+
+	case keyTop:
+		m.cursor = 0
+
+	case keyBottom:
+		if len(m.entries) > 0 {
+			m.cursor = len(m.entries) - 1
+		}
+
+	case keySelect:
+		if len(m.entries) > 0 {
+			_ = clipboard.Write(m.entries[m.cursor].Content)
+			m.shouldQuit = true
+			return m, tea.Sequence(
+				func() tea.Msg {
+					return flashMsg{text: " Copied to clipboard!", style: successStyle}
+				},
+				tea.Quit,
+			)
+		}
+
+	case keyPaste:
+		if len(m.entries) > 0 {
+			_ = clipboard.Write(m.entries[m.cursor].Content)
+			m.pasteContent = m.entries[m.cursor].Content
+			m.shouldPaste = true
+			return m, tea.Quit
+		}
+
+	case keyDelete:
+		if len(m.entries) > 0 {
+			m.entries = store.Delete(m.entries, m.cursor)
+			_ = store.Save(m.entries)
+			if m.cursor >= len(m.entries) && m.cursor > 0 {
+				m.cursor--
+			}
+			return m, func() tea.Msg {
+				return flashMsg{text: " Entry deleted", style: dangerStyle}
+			}
+		}
+
+	case keyClearAll:
+		_ = store.Clear()
+		m.entries = []store.Entry{}
+		m.cursor = 0
+		return m, func() tea.Msg {
+			return flashMsg{text: " History cleared", style: dangerStyle}
+		}
+	}
+
+	return m, nil
+}
+
+// ── View ─────────────────────────────────────────────────────────────
+
 func (m Model) View() string {
-	if m.status == statusCopied {
-		msg := SuccessStyle.Render("  Copied to clipboard!")
-		return AppStyle.Render(msg) + "\n"
+	termW := m.width
+	termH := m.height
+	if termW == 0 {
+		termW = 80
+	}
+	if termH == 0 {
+		termH = 24
 	}
 
-	termWidth := m.width
-	if termWidth == 0 {
-		termWidth = 80
+	if !m.ready {
+		loading := lipgloss.NewStyle().Foreground(muted).Render("Loading...")
+		return lipgloss.Place(termW, termH, lipgloss.Center, lipgloss.Center, loading)
 	}
 
-	// cap inner width so the TUI stays compact
-	const maxInnerWidth = 72
-	innerWidth := termWidth - 8
-	if innerWidth > maxInnerWidth {
-		innerWidth = maxInnerWidth
+	// Cap inner width for readability.
+	const maxInner = 78
+	innerW := termW - 6
+	if innerW > maxInner {
+		innerW = maxInner
 	}
-	if innerWidth < 30 {
-		innerWidth = 30
+	if innerW < 40 {
+		innerW = 40
 	}
 
-	// build list
-	var listContent string
+	// ── Sections ─────────────────────────────────────────────────
 
+	header := m.viewHeader(innerW)
+	div := dividerStyle.Render(strings.Repeat("─", innerW-4))
+
+	// How many list rows fit.
+	listH := termH - 18 // borders + header + dividers + preview + help + padding
+	if listH < 3 {
+		listH = 3
+	}
+
+	var list string
 	if len(m.entries) == 0 {
-		empty := EmptyStyle.Render("No clipboard history yet. Copy something!")
-		listContent = empty
+		list = m.viewEmpty(innerW)
 	} else {
-		var rows []string
-		// calculate how many rows fit (reserve space for borders, padding, help bar)
-		maxVisible := m.height - 10
-		if maxVisible < 3 {
-			maxVisible = 10
-		}
-
-		// scrolling window
-		start := 0
-		if m.cursor >= maxVisible {
-			start = m.cursor - maxVisible + 1
-		}
-		end := start + maxVisible
-		if end > len(m.entries) {
-			end = len(m.entries)
-		}
-
-		for i := start; i < end; i++ {
-			rows = append(rows, m.renderRow(i, innerWidth))
-		}
-		listContent = strings.Join(rows, "\n")
+		list = m.viewList(innerW, listH)
 	}
 
-	// daemon warning
-	var daemonHint string
-	if !m.daemonAlive {
-		daemonHint = "\n" + DangerStyle.Render("  daemon not running") +
-			HelpDescStyle.Render("  run: prevy --daemon")
+	// Preview (only when entries exist).
+	var preview string
+	if len(m.entries) > 0 {
+		preview = "\n" + div + "\n" + m.viewPreview(innerW)
 	}
 
-	// main box
-	mainBox := BorderStyle.
-		Width(innerWidth).
-		Render(
-			TitleStyle.Render(" Prevy") + daemonHint + "\n\n" +
-				listContent + "\n",
-		)
+	inner := header + "\n" + div + "\n" + list + preview
 
-	// help bar
-	help := m.renderHelp(innerWidth)
+	box := outerBorderStyle.Width(innerW).Render(inner)
+	help := m.viewHelp(innerW)
+	full := box + "\n" + help
 
-	content := mainBox + "\n" + help
-
-	// center horizontally in the terminal
-	block := AppStyle.Render(content)
-	if termWidth > 0 {
-		block = lipgloss.Place(termWidth, m.height, lipgloss.Center, lipgloss.Center, block)
-	}
-
-	return block
+	return lipgloss.Place(termW, termH, lipgloss.Center, lipgloss.Center, full)
 }
 
-func (m Model) renderRow(index int, maxWidth int) string {
-	e := m.entries[index]
-	isSelected := index == m.cursor
+// ── Header ───────────────────────────────────────────────────────────
 
-	// index number
-	idxStr := fmt.Sprintf("%d", index+1)
+func (m Model) viewHeader(w int) string {
+	left := logoStyle.Render("  Prevy") + headerAccentStyle.Render(" clipboard")
 
-	// relative time
-	timeStr := relativeTime(e.Timestamp)
-
-	// content preview -- truncate to fit
-	// available width = maxWidth - index(4) - cursor(2) - time(~8) - spacing(6)
-	contentWidth := maxWidth - 4 - 2 - len(timeStr) - 6
-	if contentWidth < 10 {
-		contentWidth = 10
-	}
-	preview := truncate(singleLine(e.Content), contentWidth)
-
-	if isSelected {
-		cursor := CursorStyle.Render(">")
-		idx := SelectedIndexStyle.Render(idxStr)
-		content := SelectedStyle.Width(contentWidth).Render(preview)
-		ts := SelectedTimestampStyle.Render(timeStr)
-		return lipgloss.JoinHorizontal(lipgloss.Top, cursor, " ", idx, " ", content, " ", ts)
+	// Right side: flash message OR daemon + count.
+	var right string
+	if m.flashText != "" {
+		right = m.flashStyle.Render(m.flashText)
+	} else {
+		var badge string
+		if m.daemonAlive {
+			badge = daemonOnStyle.Render("  ") + countStyle.Render("on")
+		} else {
+			badge = daemonOffStyle.Render("  ") + countStyle.Render("off")
+		}
+		items := countStyle.Render(fmt.Sprintf("  %d items", len(m.entries)))
+		right = badge + "  " + items
 	}
 
-	cursor := "  "
-	idx := IndexStyle.Render(idxStr)
-	content := ItemStyle.Width(contentWidth).Render(preview)
-	ts := TimestampStyle.Render(timeStr)
-	return lipgloss.JoinHorizontal(lipgloss.Top, cursor, idx, " ", content, " ", ts)
+	gap := w - 4 - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + right
 }
 
-func (m Model) renderHelp(width int) string {
-	pairs := []struct{ key, desc string }{
+// ── List ─────────────────────────────────────────────────────────────
+
+func (m Model) viewList(w, maxRows int) string {
+	total := len(m.entries)
+	if maxRows > total {
+		maxRows = total
+	}
+
+	// Scroll window.
+	start := 0
+	if m.cursor >= maxRows {
+		start = m.cursor - maxRows + 1
+	}
+	end := start + maxRows
+	if end > total {
+		end = total
+	}
+
+	scrollbar := buildScrollbar(maxRows, start, total)
+
+	// Available width for row content (minus scrollbar column + gap).
+	rowW := w - 6
+
+	var rows []string
+	for i := start; i < end; i++ {
+		row := m.viewRow(i, rowW)
+		rows = append(rows, row+"  "+scrollbar[i-start])
+	}
+
+	return strings.Join(rows, "\n")
+}
+
+func (m Model) viewRow(idx, w int) string {
+	e := m.entries[idx]
+	sel := idx == m.cursor
+
+	// Fixed-width columns: index(3) + gap(1) + content(flex) + gap(1) + time(7)
+	// The cursor prefix is 2 chars: "> " or "  ".
+	idxW := 3
+	tsW := 7
+	fixedW := 2 + idxW + 1 + 1 + tsW
+	contentW := w - fixedW
+	if contentW < 8 {
+		contentW = 8
+	}
+
+	// Format index right-aligned.
+	idxStr := fmt.Sprintf("%*d", idxW, idx+1)
+
+	// Time string, padded to fixed width.
+	ts := relativeTime(e.Timestamp)
+	if runeWidth(ts) < tsW {
+		ts = strings.Repeat(" ", tsW-runeWidth(ts)) + ts
+	}
+
+	// Content: force single line, then truncate to exact rune width.
+	content := singleLine(e.Content)
+	content = runesTruncate(content, contentW)
+	// Pad content to fixed width so timestamp aligns.
+	if runeWidth(content) < contentW {
+		content = content + strings.Repeat(" ", contentW-runeWidth(content))
+	}
+
+	if sel {
+		return cursorStyle.Render("> ") +
+			selectedIndexStyle.Render(idxStr) + " " +
+			selectedContentStyle.Render(content) + " " +
+			selectedTimestampStyle.Render(ts)
+	}
+
+	return "  " +
+		indexStyle.Render(idxStr) + " " +
+		normalContentStyle.Render(content) + " " +
+		timestampStyle.Render(ts)
+}
+
+// ── Scrollbar ────────────────────────────────────────────────────────
+
+func buildScrollbar(viewH, start, total int) []string {
+	chars := make([]string, viewH)
+
+	if total <= viewH {
+		for i := range chars {
+			chars[i] = " "
+		}
+		return chars
+	}
+
+	thumbSz := viewH * viewH / total
+	if thumbSz < 1 {
+		thumbSz = 1
+	}
+
+	thumbPos := 0
+	if total-viewH > 0 {
+		thumbPos = start * (viewH - thumbSz) / (total - viewH)
+	}
+
+	for i := range chars {
+		if i >= thumbPos && i < thumbPos+thumbSz {
+			chars[i] = scrollThumbStyle.Render("┃")
+		} else {
+			chars[i] = scrollTrackStyle.Render("│")
+		}
+	}
+	return chars
+}
+
+// ── Preview ──────────────────────────────────────────────────────────
+
+func (m Model) viewPreview(w int) string {
+	if m.cursor < 0 || m.cursor >= len(m.entries) {
+		return ""
+	}
+
+	raw := m.entries[m.cursor].Content
+	pw := w - 6
+	if pw < 10 {
+		pw = 10
+	}
+
+	lines := strings.Split(raw, "\n")
+	maxLines := 3
+	overflow := len(lines) > maxLines
+	if overflow {
+		lines = lines[:maxLines]
+	}
+
+	var out []string
+	for _, line := range lines {
+		line = strings.ReplaceAll(line, "\t", "  ")
+		line = runesTruncate(line, pw)
+		out = append(out, previewContentStyle.Render(line))
+	}
+	if overflow {
+		extra := len(strings.Split(raw, "\n")) - maxLines
+		out = append(out, previewLabelStyle.Render(fmt.Sprintf("  ... +%d more lines", extra)))
+	}
+
+	label := previewLabelStyle.Render("  Preview")
+	return label + "\n" + strings.Join(out, "\n")
+}
+
+// ── Empty state ──────────────────────────────────────────────────────
+
+func (m Model) viewEmpty(w int) string {
+	art := emptyIconStyle.Render(
+		"    ┌─────────┐\n" +
+			"    │         │\n" +
+			"    │  empty  │\n" +
+			"    │         │\n" +
+			"    └─────────┘")
+
+	msg := emptyStyle.Width(w - 4).Render(
+		art + "\n\n" +
+			"No clipboard history yet.\n" +
+			"Copy something to get started!")
+
+	return "\n" + msg + "\n"
+}
+
+// ── Help bar ─────────────────────────────────────────────────────────
+
+func (m Model) viewHelp(w int) string {
+	type bind struct{ key, desc string }
+	binds := []bind{
 		{"enter", "copy"},
 		{"p", "paste"},
-		{"x", "clear all"},
+		{"d", "delete"},
+		{"x", "clear"},
+		{"g/G", "top/end"},
 		{"q", "quit"},
 	}
 
+	sep := helpSepStyle.Render(" | ")
+
 	var parts []string
-	for _, p := range pairs {
-		k := HelpKeyStyle.Render(p.key)
-		d := HelpDescStyle.Render(" " + p.desc)
-		parts = append(parts, k+d)
+	for _, b := range binds {
+		parts = append(parts,
+			helpKeyStyle.Render(b.key)+helpDescStyle.Render(" "+b.desc),
+		)
 	}
 
-	helpText := strings.Join(parts, HelpDescStyle.Render("  "))
-
-	return HelpBarStyle.
-		Width(width).
-		Align(lipgloss.Center).
-		Render(helpText)
+	text := strings.Join(parts, sep)
+	return helpBarStyle.Width(w).Align(lipgloss.Center).Render(text)
 }
 
+// ── String helpers ───────────────────────────────────────────────────
+
+// singleLine collapses all whitespace into spaces.
 func singleLine(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\r", "")
@@ -246,16 +472,30 @@ func singleLine(s string) string {
 	return s
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
+// runesTruncate truncates s so its display width is at most max runes,
+// appending "..." when truncated. This guarantees a single-line result.
+func runesTruncate(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	count := utf8.RuneCountInString(s)
+	if count <= max {
 		return s
 	}
 	if max <= 3 {
-		return s[:max]
+		runes := []rune(s)
+		return string(runes[:max])
 	}
-	return s[:max-3] + "..."
+	runes := []rune(s)
+	return string(runes[:max-3]) + "..."
 }
 
+// runeWidth returns the rune count of s.
+func runeWidth(s string) int {
+	return utf8.RuneCountInString(s)
+}
+
+// relativeTime formats a timestamp as a short human-readable string.
 func relativeTime(t time.Time) string {
 	d := time.Since(t)
 	switch {
@@ -270,7 +510,6 @@ func relativeTime(t time.Time) string {
 	case d < 24*time.Hour:
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	default:
-		days := int(d.Hours() / 24)
-		return fmt.Sprintf("%dd ago", days)
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
 }

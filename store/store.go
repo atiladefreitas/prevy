@@ -83,6 +83,13 @@ func Add(entries []Entry, content string) []Entry {
 	return result
 }
 
+func Delete(entries []Entry, index int) []Entry {
+	if index < 0 || index >= len(entries) {
+		return entries
+	}
+	return append(entries[:index], entries[index+1:]...)
+}
+
 func Clear() error {
 	return Save([]Entry{})
 }
