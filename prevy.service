@@ -1,0 +1,11 @@
+[Unit]
+Description=Prevy clipboard history daemon
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/prevy --daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

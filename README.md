@@ -26,11 +26,27 @@ Prevy runs a lightweight daemon that watches your system clipboard in the backgr
 
 ## Install
 
+### Arch Linux (AUR)
+
+```bash
+yay -S prevy
+```
+
+Or with any other AUR helper (`paru`, `trizen`, etc.), or manually:
+
+```bash
+git clone https://aur.archlinux.org/prevy.git
+cd prevy
+makepkg -si
+```
+
+### Go install
+
 ```bash
 go install github.com/atiladefreitas/prevy@latest
 ```
 
-Or build from source:
+### Build from source
 
 ```bash
 git clone https://github.com/atiladefreitas/prevy.git
@@ -88,6 +104,7 @@ That's it. Your full clipboard history is right there.
 | *(none)* | Open the clipboard history TUI |
 | `--daemon` | Start the background clipboard watcher |
 | `--status` | Check if the daemon is running |
+| `--version` | Show version |
 | `--help` | Show help |
 
 ---
@@ -145,23 +162,18 @@ prevy/
 
 ## Autostart (systemd)
 
-Create `~/.config/systemd/user/prevy.service`:
-
-```ini
-[Unit]
-Description=Prevy clipboard daemon
-
-[Service]
-ExecStart=%h/go/bin/prevy --daemon
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-```
-
-Then enable it:
+A systemd user service is included. If you installed from the AUR, just enable it:
 
 ```bash
+systemctl --user enable --now prevy.service
+```
+
+If you installed via `go install`, copy the service file manually:
+
+```bash
+cp prevy.service ~/.config/systemd/user/prevy.service
+# Edit ExecStart to point to your binary, e.g. ExecStart=%h/go/bin/prevy --daemon
+systemctl --user daemon-reload
 systemctl --user enable --now prevy.service
 ```
 
