@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/atiladefreitas/prevy/clipboard"
+	"github.com/atiladefreitas/prevy/daemon"
 	"github.com/atiladefreitas/prevy/store"
 )
 
@@ -17,31 +18,36 @@ type status int
 const (
 	statusBrowsing status = iota
 	statusCopied
+	statusPasted
 	statusCleared
 )
 
 type Model struct {
-	entries []store.Entry
-	cursor  int
-	width   int
-	height  int
-	status  status
+	entries      []store.Entry
+	cursor       int
+	width        int
+	height       int
+	status       status
+	pasteContent string
+	daemonAlive  bool
 }
 
 func New() Model {
 	entries, _ := store.Load()
 
-	// read current clipboard and add if new
-	current, err := clipboard.Read()
-	if err == nil && current != "" {
-		entries = store.Add(entries, current)
-		_ = store.Save(entries)
-	}
-
 	return Model{
-		entries: entries,
-		cursor:  0,
+		entries:     entries,
+		cursor:      0,
+		daemonAlive: daemon.IsRunning(),
 	}
+}
+
+func (m Model) ShouldPaste() bool {
+	return m.status == statusPasted
+}
+
+func (m Model) PasteContent() string {
+	return m.pasteContent
 }
 
 func (m Model) Init() tea.Cmd {
@@ -79,6 +85,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 
+		case keyPaste:
+			if len(m.entries) > 0 {
+				_ = clipboard.Write(m.entries[m.cursor].Content)
+				m.pasteContent = m.entries[m.cursor].Content
+				m.status = statusPasted
+				return m, tea.Quit
+			}
+
 		case keyClearAll:
 			_ = store.Clear()
 			m.entries = []store.Entry{}
@@ -95,13 +109,17 @@ func (m Model) View() string {
 		return AppStyle.Render(msg) + "\n"
 	}
 
-	width := m.width
-	if width == 0 {
-		width = 60
+	termWidth := m.width
+	if termWidth == 0 {
+		termWidth = 80
 	}
 
-	// inner content width (accounting for border + padding)
-	innerWidth := width - 8
+	// cap inner width so the TUI stays compact
+	const maxInnerWidth = 72
+	innerWidth := termWidth - 8
+	if innerWidth > maxInnerWidth {
+		innerWidth = maxInnerWidth
+	}
 	if innerWidth < 30 {
 		innerWidth = 30
 	}
@@ -136,18 +154,33 @@ func (m Model) View() string {
 		listContent = strings.Join(rows, "\n")
 	}
 
+	// daemon warning
+	var daemonHint string
+	if !m.daemonAlive {
+		daemonHint = "\n" + DangerStyle.Render("  daemon not running") +
+			HelpDescStyle.Render("  run: prevy --daemon")
+	}
+
 	// main box
 	mainBox := BorderStyle.
 		Width(innerWidth).
 		Render(
-			TitleStyle.Render(" Prevy") + "\n\n" +
+			TitleStyle.Render(" Prevy") + daemonHint + "\n\n" +
 				listContent + "\n",
 		)
 
 	// help bar
 	help := m.renderHelp(innerWidth)
 
-	return AppStyle.Render(mainBox + "\n" + help)
+	content := mainBox + "\n" + help
+
+	// center horizontally in the terminal
+	block := AppStyle.Render(content)
+	if termWidth > 0 {
+		block = lipgloss.Place(termWidth, m.height, lipgloss.Center, lipgloss.Center, block)
+	}
+
+	return block
 }
 
 func (m Model) renderRow(index int, maxWidth int) string {
@@ -186,6 +219,7 @@ func (m Model) renderRow(index int, maxWidth int) string {
 func (m Model) renderHelp(width int) string {
 	pairs := []struct{ key, desc string }{
 		{"enter", "copy"},
+		{"p", "paste"},
 		{"x", "clear all"},
 		{"q", "quit"},
 	}

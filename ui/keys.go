@@ -9,6 +9,7 @@ const (
 	keyUp
 	keyDown
 	keySelect
+	keyPaste
 	keyClearAll
 	keyQuit
 )
@@ -21,6 +22,8 @@ func parseKey(msg tea.KeyMsg) keyAction {
 		return keyDown
 	case "enter":
 		return keySelect
+	case "p":
+		return keyPaste
 	case "x":
 		return keyClearAll
 	case "q", "esc", "ctrl+c":
